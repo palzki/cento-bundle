@@ -1,0 +1,34 @@
+{
+  "accounts": [
+    {
+      "username": "player1",
+      "password": "your_password_here",
+      "bank_password": "your_bank_password_here",
+      "character_name": "YourCharacterName",
+      "want_dungeon_key": true,
+      "want_quest_voucher": true,
+      "want_bundle_shop": true,
+      "want_proof_of_blood": true,
+      "want_normal_daily": true,
+      "want_seasonal_claims": false
+    },
+    {
+      "username": "player2",
+      "password": "your_password_here",
+      "bank_password": "your_bank_password_here",
+      "character_name": "YourCharacterName2",
+      "want_dungeon_key": true,
+      "want_quest_voucher": true,
+      "want_bundle_shop": false,
+      "want_proof_of_blood": false,
+      "want_normal_daily": true,
+      "want_seasonal_claims": false
+    },
+    {
+      "username": "player3",
+      "password": "your_password_here",
+      "bank_password": "your_bank_password_here",
+      "want_bundle_shop": true
+    }
+  ]
+}
