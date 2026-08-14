@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import requests
@@ -70,7 +71,15 @@ def verify_transaction_status(page, character_name, flow_label):
         # clean_label = flow_label.lower().replace(" ", "_")
         # page.screenshot(path=f"purchase_{clean_label}_{character_name}_complete.png")
 
-        if "alert-danger" in element_classes or "already claimed" in message_text.lower() or "invalid" in message_text.lower():
+        if (
+            "alert-danger" in element_classes
+            or "already claimed" in message_text.lower()
+            or "invalid" in message_text.lower()
+            or "sold out" in message_text.lower()
+            or "insufficient" in message_text.lower()
+            or "not enough" in message_text.lower()
+            or "failed" in message_text.lower()
+        ):
             print(f"  ❌ [{flow_label} FAILED]: {message_text}")
             send_to_discord(f"  ❌ [{flow_label} FAILED]: {message_text}")
             if "Captcha" in message_text or "captcha" in message_text:
@@ -114,7 +123,7 @@ def purchase_abyssal_key(page, bank_password, character_name):
     page.locator("input[placeholder='Bank Password']").first.fill(bank_password)
     modal_buy_button = page.locator(".modal-content button:has-text('Buy'), .modal-footer button:has-text('Buy')").first
     # uncomment to actually buy
-    # modal_buy_button.click()
+    modal_buy_button.click()
 
     verify_transaction_status(page, character_name, "Abyssal Key")
 
@@ -132,6 +141,23 @@ def purchase_daily_quest_voucher(page, bank_password, character_name):
     modal_buy_button.click()
 
     verify_transaction_status(page, character_name, "Daily Quest Voucher")
+
+
+def purchase_bundle_shop_item(page, bank_password):
+    page.goto("https://seal-centoria.com/bundle-shop")
+    page.wait_for_load_state("networkidle")
+    page.locator("#buy-item").first.click()
+    page.wait_for_load_state("networkidle")
+
+    # Use the second selectable label element (index 1) for the selector toggle.
+    page.locator(".selectric .label:has-text('Select Character')").click()
+    page.locator('.selectric-open .selectric-items li').nth(1).click();
+
+    page.locator("input[placeholder='Bank Password']").first.fill(bank_password)
+    modal_buy_button = page.locator(".modal-content button:has-text('Buy'), .modal-footer button:has-text('Buy')").first
+    modal_buy_button.click()
+
+    verify_transaction_status(page, "First Character", "Bundle Shop Item")
 
 
 def purchase_proof_of_blood(page, bank_password, character_name):
@@ -303,56 +329,85 @@ def claim_daily_login_events(page, character_name):
 
 
 # =====================================================================
+# ACCOUNT CONFIG LOADER
+# =====================================================================
+def load_accounts():
+    config_path = os.path.join(os.getcwd(), "accounts.json")
+    if not os.path.exists(config_path):
+        print(f"[Config] No accounts.json found at {config_path}. Skipping all accounts.")
+        return []
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    raw_accounts = data.get("accounts", [])
+    validated = []
+
+    for idx, a in enumerate(raw_accounts, start=1):
+        username = (a.get("username") or "").strip()
+        password = a.get("password") or ""
+        bank = a.get("bank_pass") or a.get("bank_password") or ""
+        char = a.get("char_name") or a.get("character_name") or ""
+
+        # normalize flags
+        want_bundle = bool(a.get("want_bundle_shop", False))
+        # any other purchase flags present
+        other_flags = any(
+            bool(a.get(k, False))
+            for k in (
+                "want_dungeon_key",
+                "want_quest_voucher",
+                "want_proof_of_blood",
+                "want_normal_daily",
+                "want_seasonal_claims",
+                "want_abyssal_key",
+            )
+        )
+
+        # Validation rules:
+        # - If only want_bundle_shop is used (and no other want_* flags), require username, password, bank.
+        # - Otherwise require username, password, bank, and character name.
+        if want_bundle and not other_flags:
+            ok = bool(username and password and bank)
+            missing = []
+            if not username:
+                missing.append("username")
+            if not password:
+                missing.append("password")
+            if not bank:
+                missing.append("bank_password")
+            if not ok:
+                print(f"[Config] Skipping account #{idx}: missing required fields for bundle-only account: {', '.join(missing)}")
+                continue
+        else:
+            ok = bool(username and password and bank and char)
+            missing = []
+            if not username:
+                missing.append("username")
+            if not password:
+                missing.append("password")
+            if not bank:
+                missing.append("bank_password")
+            if not char:
+                missing.append("character_name")
+            if not ok:
+                print(f"[Config] Skipping account #{idx}: missing required fields: {', '.join(missing)}")
+                continue
+
+        # normalize keys so rest of code can rely on consistent names
+        a["bank_pass"] = bank
+        a["char_name"] = char
+
+        validated.append(a)
+
+    return validated
+
+
+# =====================================================================
 # ENGINE RUNNER
 # =====================================================================
 def main():
-    accounts_config = [
-        {
-            "username": os.getenv("CENTORIA_USER", ""),
-            "password": os.getenv("CENTORIA_PASS", ""),
-            "bank_pass": os.getenv("CENTORIA_BANK", ""),
-            "char_name": os.getenv("CENTORIA_CHAR", ""),
-            "want_dungeon_key": True,
-            "want_quest_voucher": True,
-            "want_proof_of_blood": True,
-            # "want_abyssal_key": True,
-            "want_normal_daily": True,
-            "want_seasonal_claims": False
-        },
-        {
-            "username": os.getenv("CENTORIA_USER_2", ""),
-            "password": os.getenv("CENTORIA_PASS_2", ""),
-            "bank_pass": os.getenv("CENTORIA_BANK_2", ""),
-            "char_name": os.getenv("CENTORIA_CHAR_2", ""),
-            "want_dungeon_key": True,
-            "want_quest_voucher": True,
-            "want_proof_of_blood": False,
-            "want_normal_daily": True,
-            "want_seasonal_claims": False
-        },
-        {
-            "username": os.getenv("CENTORIA_USER_3", ""),
-            "password": os.getenv("CENTORIA_PASS_3", ""),
-            "bank_pass": os.getenv("CENTORIA_BANK_3", ""),
-            "char_name": os.getenv("CENTORIA_CHAR_3", ""),
-            "want_dungeon_key": True,
-            "want_quest_voucher": True,
-            "want_proof_of_blood": False,
-            "want_normal_daily": True,
-            "want_seasonal_claims": False
-        },
-        {
-            "username": os.getenv("CENTORIA_USER_4", ""),
-            "password": os.getenv("CENTORIA_PASS_4", ""),
-            "bank_pass": os.getenv("CENTORIA_BANK_4", ""),
-            "char_name": os.getenv("CENTORIA_CHAR_4", ""),
-            "want_dungeon_key": True,
-            "want_quest_voucher": True,
-            "want_proof_of_blood": False,
-            "want_normal_daily": True,
-            "want_seasonal_claims": False
-        },
-    ]
+    accounts_config = load_accounts()
 
     with sync_playwright() as p:
         user_data_dir = os.path.join(os.getcwd(), "playwright_stealth_profile")
@@ -370,34 +425,41 @@ def main():
         page = context.pages[0] if context.pages else context.new_page()
         
         for account in accounts_config:
-            if not account["username"]:
+            username = account.get("username", "")
+            if not username:
                 continue
-                
-            print(f"\n👤 Account: {account['username']} ({account['char_name']})")
+
+            bank_pass = account.get("bank_pass") or account.get("bank_password", "")
+            char_name = account.get("char_name") or account.get("character_name", "")
+
+            print(f"\n👤 Account: {username} ({char_name})")
             send_to_discord("==================================================")
-            send_to_discord(f"\n👤 Account: {account['username']} ({account['char_name']})")
+            send_to_discord(f"\n👤 Account: {username} ({char_name})")
 
             try:
-                run_login(page, account["username"], account["password"])
+                run_login(page, username, account.get("password", ""))
                 
                 # Dynamic .get() selectors allow configuration files to remain minimal and clean
                 if account.get("want_dungeon_key", False):
-                    purchase_world_dungeon_key(page, account["bank_pass"], account["char_name"])
+                    purchase_world_dungeon_key(page, bank_pass, char_name)
 
                 if account.get("want_quest_voucher", False):
-                    purchase_daily_quest_voucher(page, account["bank_pass"], account["char_name"])
+                    purchase_daily_quest_voucher(page, bank_pass, char_name)
+
+                if account.get("want_bundle_shop", False):
+                    purchase_bundle_shop_item(page, bank_pass)
 
                 if account.get("want_proof_of_blood", False):
-                    purchase_proof_of_blood(page, account["bank_pass"], account["char_name"])
+                    purchase_proof_of_blood(page, bank_pass, char_name)
 
                 if account.get("want_abyssal_key", False):
-                    purchase_abyssal_key(page, account["bank_pass"], account["char_name"])
+                    purchase_abyssal_key(page, bank_pass, char_name)
                 
                 if account.get("want_normal_daily", False):
-                    claim_normal_daily_login(page, account["char_name"])
+                    claim_normal_daily_login(page, char_name)
                 
                 if account.get("want_seasonal_claims", False):
-                    claim_daily_login_events(page, account["char_name"])
+                    claim_daily_login_events(page, char_name)
                 
                 print("🧼 Clearing session... Logging out account safely.")
                 page.goto("https://seal-centoria.com/member/logout")

@@ -14,6 +14,7 @@ __pycache__/
 .env
 .env.*
 !.env.sample
+accounts*.json
 
 # Playwright / browser local profile
 playwright_stealth_profile/
