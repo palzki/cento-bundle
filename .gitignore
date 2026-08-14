@@ -1,0 +1,25 @@
+# Local launcher
+aselole.bat
+
+# Python virtual env
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Local secrets / env
+.env
+.env.*
+!.env.sample
+
+# Playwright / browser local profile
+playwright_stealth_profile/
+playwright-report/
+test-results/
+
+# Optional logs / screenshots
+*.log
+*.png
