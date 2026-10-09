@@ -5,6 +5,8 @@ import requests
 from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
 
+from fast_buy import run_fast_purchases
+
 load_dotenv()
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
@@ -438,23 +440,17 @@ def main():
 
             try:
                 run_login(page, username, account.get("password", ""))
-                
-                # Dynamic .get() selectors allow configuration files to remain minimal and clean
-                if account.get("want_dungeon_key", False):
-                    purchase_world_dungeon_key(page, bank_pass, char_name)
 
-                if account.get("want_quest_voucher", False):
-                    purchase_daily_quest_voucher(page, bank_pass, char_name)
+                # --- FAST PATH: webshop buys via direct POST (reuses this logged-in
+                #     Playwright context -- no extra Cloudflare fight, no clicking).
+                #     Covers want_dungeon_key / want_quest_voucher /
+                #     want_abyssal_key / want_proof_of_blood.
+                run_fast_purchases(page, account, bank_pass, char_name, notify=send_to_discord)
 
+                # Bundle Shop stays on the UI flow (separate /bundle-shop page/endpoint)
                 if account.get("want_bundle_shop", False):
                     purchase_bundle_shop_item(page, bank_pass)
 
-                if account.get("want_proof_of_blood", False):
-                    purchase_proof_of_blood(page, bank_pass, char_name)
-
-                if account.get("want_abyssal_key", False):
-                    purchase_abyssal_key(page, bank_pass, char_name)
-                
                 if account.get("want_normal_daily", False):
                     claim_normal_daily_login(page, char_name)
                 
