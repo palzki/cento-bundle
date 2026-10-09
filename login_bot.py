@@ -445,7 +445,7 @@ def main():
                 #     Playwright context -- no extra Cloudflare fight, no clicking).
                 #     Covers want_dungeon_key / want_quest_voucher /
                 #     want_abyssal_key / want_proof_of_blood.
-                run_fast_purchases(page, account, bank_pass, char_name)
+                run_fast_purchases(page, account, bank_pass, char_name, notify=send_to_discord)
 
                 # Bundle Shop stays on the UI flow (separate /bundle-shop page/endpoint)
                 if account.get("want_bundle_shop", False):

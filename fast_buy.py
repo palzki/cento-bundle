@@ -21,10 +21,11 @@ CONFIRMED FROM THE SITE ITSELF (webshop.6.2.2 JS + /api/viewItem + /api/itemList
         pw:        <bank password>,
         buy_id:    <item id>,                # == the item's `id` in /api/itemList
         payment:   "silver",                 # the only pay_method option ("Cent")
-        char_name: <character display name>  # e.g. "Pozyomka"; "" for no-char items
+        char_name: <character display name>  # e.g. "Mari"; "" for no-char items
     }
+    Response JSON: { "success": bool, "code": int, "messages": [html, ...] }
 
-    buy_id values for your daily items (verified live, nothing purchased):
+    buy_id values for the daily items (verified live, nothing purchased):
         World Dungeon Key (x3) ......... 978   (needs char_name)
         Daily Quest Voucher ............ 578   (needs char_name)
         Abyssal Key (x3) ............... 321   (no character)
@@ -32,8 +33,15 @@ CONFIRMED FROM THE SITE ITSELF (webshop.6.2.2 JS + /api/viewItem + /api/itemList
     (Bundle Shop lives on /bundle-shop -- different endpoint -- still via UI flow.)
 """
 
+import json
+import re
+import time
+
 BUY_URL = "https://seal-centoria.com/webshop/api/buyItem"
 SHOP_REFERER = "https://seal-centoria.com/webshop"
+
+# Small politeness gap between consecutive POSTs so we don't hammer the server.
+DELAY_BETWEEN_BUYS = 1.0  # seconds
 
 # want_* flag  ->  (buy_id, needs_character, human label)
 ITEM_MAP = {
@@ -42,6 +50,24 @@ ITEM_MAP = {
     "want_abyssal_key":    ("321", False, "Abyssal Key (x3)"),
     "want_proof_of_blood": ("326", False, "Proof of Blood"),
 }
+
+
+def _clean(msg):
+    """Strip the HTML tags the API wraps its messages in, collapse whitespace."""
+    if isinstance(msg, (list, tuple)):
+        msg = " ".join(str(m) for m in msg)
+    text = re.sub(r"<[^>]+>", "", str(msg))
+    return " ".join(text.split()).strip()
+
+
+def _report(line, notify):
+    """Print to console and, if a notifier was given (e.g. send_to_discord), send it too."""
+    print(line)
+    if notify:
+        try:
+            notify(line)
+        except Exception as e:
+            print(f"  [notify error] {e}")
 
 
 # =====================================================================
@@ -58,8 +84,12 @@ def get_csrf_token(page):
 # THE FAST BUY
 # =====================================================================
 def buy_item_api(page, buy_id, bank_password, char_name="", payment="silver",
-                 times=1, flow_label=None):
-    """Fire one webshop purchase as a direct POST, reusing the logged-in context."""
+                 times=1, flow_label=None, notify=None):
+    """Fire one webshop purchase as a direct POST, reusing the logged-in context.
+
+    notify: optional callable (e.g. send_to_discord) that receives each result
+            line, so the fast path reports to Discord exactly like the old UI flow.
+    """
     label = flow_label or f"buy_id {buy_id}"
 
     if "webshop" not in (page.url or ""):
@@ -67,7 +97,7 @@ def buy_item_api(page, buy_id, bank_password, char_name="", payment="silver",
 
     token = get_csrf_token(page)
     if not token:
-        print(f"  [!] [{label}] No csrf-token meta -- logged in / on the shop page?")
+        _report(f"  ⚠️  [{label}]: no csrf-token meta -- logged in / on the shop page?", notify)
         return False
 
     form = {"pw": bank_password, "buy_id": str(buy_id),
@@ -82,44 +112,56 @@ def buy_item_api(page, buy_id, bank_password, char_name="", payment="silver",
 
     ok_any = False
     for i in range(max(1, int(times))):
+        if i > 0:
+            time.sleep(DELAY_BETWEEN_BUYS)
         resp = page.request.post(BUY_URL, form=form, headers=headers)
         status, text = resp.status, resp.text()
-        low = text.lower().replace(" ", "")
-        # API returns JSON {success: bool, messages: "..."}.
-        ok = status == 200 and '"success":false' not in low
-        bad = any(w in low for w in ("already", "invalid", "soldout",
-                                     "insufficient", "notenough", "failed", "minimum"))
-        if ok and not bad:
-            print(f"  [OK]   [{label}] x{i+1} -> {status}: {text[:200]}")
+
+        # Parse the API's JSON {success, code, messages}; fall back to raw text.
+        success, msg = None, text[:300]
+        try:
+            data = json.loads(text)
+            success = bool(data.get("success"))
+            msg = _clean(data.get("messages", text))
+        except Exception:
+            msg = _clean(text)
+
+        ok = (status == 200) and (success is not False)
+        suffix = f" [{i+1}/{times}]" if int(times) > 1 else ""
+        if ok:
+            _report(f"  ✅ [{label}{suffix} SUCCESS]: {msg}", notify)
             ok_any = True
         else:
-            print(f"  [FAIL] [{label}] x{i+1} -> {status}: {text[:300]}")
-            return ok_any  # stop on first failure (already claimed / out of currency / etc.)
+            _report(f"  ❌ [{label}{suffix} FAILED] ({status}): {msg}", notify)
+            return ok_any  # stop looping on first failure (already claimed / out of currency / etc.)
     return ok_any
 
 
 # =====================================================================
 # DROP-IN REPLACEMENT for the per-account purchase block in main()
 # =====================================================================
-def run_fast_purchases(page, account, bank_pass, char_name):
+def run_fast_purchases(page, account, bank_pass, char_name, notify=None):
     """Fire all flagged webshop purchases for one account via the fast API path.
 
-    Mirrors the want_* flags you already use in accounts.json. Call it in main()
-    right after run_login(...), in place of the individual purchase_* calls.
-    Returns nothing; prints OK/FAIL per item.
+    Mirrors the want_* flags in accounts.json. Pass notify=send_to_discord so each
+    result is reported to Discord just like the old UI flow did.
 
     NOTE: Bundle Shop (want_bundle_shop) and the daily-login / seasonal claims are
-    NOT handled here -- keep your existing UI functions for those.
+    NOT handled here -- keep the existing UI functions for those.
     """
+    first = True
     for flag, (buy_id, needs_char, label) in ITEM_MAP.items():
         if not account.get(flag, False):
             continue
         if needs_char and not char_name:
-            print(f"  [SKIP] [{label}] needs a character but none set for this account.")
+            _report(f"  ⏩ [{label} SKIPPED]: needs a character but none set for this account.", notify)
             continue
+        if not first:
+            time.sleep(DELAY_BETWEEN_BUYS)
+        first = False
         buy_item_api(page, buy_id=buy_id, bank_password=bank_pass,
                      char_name=char_name if needs_char else "",
-                     flow_label=label)
+                     flow_label=label, notify=notify)
 
 
 # =====================================================================
@@ -151,21 +193,8 @@ def harvest_buy_ids(page, name_filter=""):
 
 
 # =====================================================================
-# HOW TO WIRE IT INTO login_bot.py  (minimal, keeps your UI code as fallback)
+# HOW TO WIRE IT INTO login_bot.py
 # =====================================================================
-#   at top of login_bot.py:
-#       from fast_buy import run_fast_purchases
-#
-#   in main(), inside the `for account in accounts_config:` try-block, replace the
-#   five purchase_*() if-blocks with ONE line (keep bundle + daily/seasonal as-is):
-#
-#       run_login(page, username, account.get("password", ""))
-#
-#       run_fast_purchases(page, account, bank_pass, char_name)   # <-- fast webshop buys
-#
-#       if account.get("want_bundle_shop", False):
-#           purchase_bundle_shop_item(page, bank_pass)            # still UI (different page)
-#       if account.get("want_normal_daily", False):
-#           claim_normal_daily_login(page, char_name)             # still UI (Turnstile)
-#       if account.get("want_seasonal_claims", False):
-#           claim_daily_login_events(page, char_name)             # still UI (Turnstile)
+#   at top:  from fast_buy import run_fast_purchases
+#   in main(), after run_login(...):
+#       run_fast_purchases(page, account, bank_pass, char_name, notify=send_to_discord)
