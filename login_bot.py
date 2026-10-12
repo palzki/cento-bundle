@@ -408,7 +408,7 @@ def load_accounts():
 # =====================================================================
 # ENGINE RUNNER
 # =====================================================================
-def main():
+def main(dry_run=None):
     accounts_config = load_accounts()
 
     with sync_playwright() as p:
@@ -445,7 +445,7 @@ def main():
                 #     Playwright context -- no extra Cloudflare fight, no clicking).
                 #     Covers want_dungeon_key / want_quest_voucher /
                 #     want_abyssal_key / want_proof_of_blood.
-                run_fast_purchases(page, account, bank_pass, char_name, notify=send_to_discord)
+                run_fast_purchases(page, account, bank_pass, char_name, notify=send_to_discord, dry_run=dry_run)
 
                 # Bundle Shop stays on the UI flow (separate /bundle-shop page/endpoint)
                 if account.get("want_bundle_shop", False):
@@ -476,4 +476,10 @@ def main():
         context.close()
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="Seal Centoria daily login + webshop bot")
+    parser.add_argument("--dry", "--dry-run", action="store_true", dest="dry",
+                        help="Dry-run: log in and print each webshop buy WITHOUT purchasing.")
+    args = parser.parse_args()
+    # True forces dry-run; None lets fast_buy fall back to the SEAL_DRY_RUN env var.
+    main(dry_run=True if args.dry else None)
