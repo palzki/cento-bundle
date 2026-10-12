@@ -153,12 +153,24 @@ def buy_item_api(page, buy_id, bank_password, char_name="", payment="silver",
 
         ok = (status == 200) and (success is not False)
         suffix = f" [{i+1}/{times}]" if int(times) > 1 else ""
+
+        # "already bought today" / daily-limit is an EXPECTED benign outcome,
+        # not a real failure -- report it calmly so it doesn't look alarming.
+        low = msg.lower()
+        already_done = any(w in low for w in (
+            "already reach the limit", "can only be bought once", "once / account / day",
+            "already claimed", "already bought", "already purchased",
+        ))
+
         if ok:
             _report(f"  ✅ [{label}{suffix} SUCCESS]: {msg}", notify)
             ok_any = True
+        elif already_done:
+            _report(f"  ⏩ [{label}{suffix} ALREADY DONE TODAY]: {msg}", notify)
+            return ok_any  # nothing more to do for this item today
         else:
             _report(f"  ❌ [{label}{suffix} FAILED] ({status}): {msg}", notify)
-            return ok_any  # stop looping on first failure (already claimed / out of currency / etc.)
+            return ok_any  # stop looping on a real failure (out of currency, etc.)
     return ok_any
 
 
