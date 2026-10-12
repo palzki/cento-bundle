@@ -31,9 +31,17 @@ CONFIRMED FROM THE SITE ITSELF (webshop.6.2.2 JS + /api/viewItem + /api/itemList
         Abyssal Key (x3) ............... 321   (no character)
         [Centoria Tower] Proof of Blood  326   (no character)
     (Bundle Shop lives on /bundle-shop -- different endpoint -- still via UI flow.)
+
+DEBUG / DRY-RUN MODE
+    Set the env var SEAL_DRY_RUN=1 (or pass dry_run=True) to see exactly what WOULD
+    be sent and how each result line prints -- WITHOUT firing a real purchase.
+    Great for checking the console + Discord formatting safely.
+        Windows:    set SEAL_DRY_RUN=1    &&  python login_bot.py
+        mac/Linux:  SEAL_DRY_RUN=1 python login_bot.py
 """
 
 import json
+import os
 import re
 import time
 
@@ -42,6 +50,9 @@ SHOP_REFERER = "https://seal-centoria.com/webshop"
 
 # Small politeness gap between consecutive POSTs so we don't hammer the server.
 DELAY_BETWEEN_BUYS = 1.0  # seconds
+
+# Global dry-run switch, read from the environment (no code edit needed to toggle).
+DRY_RUN = os.getenv("SEAL_DRY_RUN", "").strip().lower() in ("1", "true", "yes", "on")
 
 # want_* flag  ->  (buy_id, needs_character, human label)
 ITEM_MAP = {
@@ -84,13 +95,16 @@ def get_csrf_token(page):
 # THE FAST BUY
 # =====================================================================
 def buy_item_api(page, buy_id, bank_password, char_name="", payment="silver",
-                 times=1, flow_label=None, notify=None):
+                 times=1, flow_label=None, notify=None, dry_run=None):
     """Fire one webshop purchase as a direct POST, reusing the logged-in context.
 
-    notify: optional callable (e.g. send_to_discord) that receives each result
-            line, so the fast path reports to Discord exactly like the old UI flow.
+    notify  : optional callable (e.g. send_to_discord) that receives each result line.
+    dry_run : True  -> show the request + a simulated result, DO NOT buy.
+              False -> buy for real.
+              None  -> use the SEAL_DRY_RUN environment variable (default: real).
     """
     label = flow_label or f"buy_id {buy_id}"
+    dry = DRY_RUN if dry_run is None else dry_run
 
     if "webshop" not in (page.url or ""):
         page.goto(SHOP_REFERER, wait_until="domcontentloaded")
@@ -102,6 +116,17 @@ def buy_item_api(page, buy_id, bank_password, char_name="", payment="silver",
 
     form = {"pw": bank_password, "buy_id": str(buy_id),
             "payment": payment, "char_name": char_name}
+
+    # ---- DRY-RUN: show what would be sent + how it would report, then stop ----
+    if dry:
+        shown = dict(form, pw="***")  # never print the real bank password
+        print(f"  🧪 [DRY-RUN] would POST {BUY_URL}")
+        print(f"             payload: {shown}")
+        print(f"             csrf token present: {bool(token)} (len {len(token)})")
+        _report(f"  🧪 [DRY-RUN] [{label}] would buy "
+                f"(char='{char_name or '-'}', payment='{payment}', x{times}) -- not sent.", notify)
+        return True
+
     headers = {
         "accept": "*/*",
         "x-csrf-token": token,
@@ -140,15 +165,20 @@ def buy_item_api(page, buy_id, bank_password, char_name="", payment="silver",
 # =====================================================================
 # DROP-IN REPLACEMENT for the per-account purchase block in main()
 # =====================================================================
-def run_fast_purchases(page, account, bank_pass, char_name, notify=None):
+def run_fast_purchases(page, account, bank_pass, char_name, notify=None, dry_run=None):
     """Fire all flagged webshop purchases for one account via the fast API path.
 
     Mirrors the want_* flags in accounts.json. Pass notify=send_to_discord so each
-    result is reported to Discord just like the old UI flow did.
+    result is reported to Discord just like the old UI flow did. dry_run flows down
+    to buy_item_api (None -> SEAL_DRY_RUN env var).
 
     NOTE: Bundle Shop (want_bundle_shop) and the daily-login / seasonal claims are
     NOT handled here -- keep the existing UI functions for those.
     """
+    dry = DRY_RUN if dry_run is None else dry_run
+    if dry:
+        _report("  🧪 [DRY-RUN MODE] no real purchases will be made.", notify)
+
     first = True
     for flag, (buy_id, needs_char, label) in ITEM_MAP.items():
         if not account.get(flag, False):
@@ -161,7 +191,7 @@ def run_fast_purchases(page, account, bank_pass, char_name, notify=None):
         first = False
         buy_item_api(page, buy_id=buy_id, bank_password=bank_pass,
                      char_name=char_name if needs_char else "",
-                     flow_label=label, notify=notify)
+                     flow_label=label, notify=notify, dry_run=dry_run)
 
 
 # =====================================================================
@@ -198,3 +228,5 @@ def harvest_buy_ids(page, name_filter=""):
 #   at top:  from fast_buy import run_fast_purchases
 #   in main(), after run_login(...):
 #       run_fast_purchases(page, account, bank_pass, char_name, notify=send_to_discord)
+#
+#   To test safely:  set SEAL_DRY_RUN=1  (Windows)  then run -- prints, never buys.
